@@ -1,0 +1,69 @@
+# Builds Aurora for iPhone on GitHub's free macOS runners and publishes an UNSIGNED .ipa
+# artifact for sideloading. The iOS project is stored as AuroraiOS.zip at the repo root.
+name: Build Aurora iOS
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack project
+        run: |
+          rm -rf AuroraiOS
+          unzip -q AuroraiOS.zip
+          ls AuroraiOS
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: AuroraiOS
+        run: xcodegen
+
+      - name: Build (unsigned, device)
+        working-directory: AuroraiOS
+        run: |
+          set -o pipefail
+          xcodebuild build -project Aurora.xcodeproj -scheme Aurora \
+            -configuration Release -sdk iphoneos -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" 2>&1 | tee xcodebuild.log | tail -40
+
+      - name: Show all build errors on failure
+        if: failure()
+        working-directory: AuroraiOS
+        run: |
+          echo "===== ERRORS ====="
+          grep -nE "error:|warning: treated as error" xcodebuild.log | head -200 || true
+
+      - name: Run unit tests (simulator)
+        continue-on-error: true
+        working-directory: AuroraiOS
+        run: |
+          set -o pipefail
+          DEST=$(xcrun simctl list devices available | grep -m1 -oE "\(([0-9A-F-]{36})\)" | tr -d "()" || true)
+          if [ -n "$DEST" ]; then
+            xcodebuild test -project Aurora.xcodeproj -scheme Aurora \
+              -destination "id=$DEST" CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+          else
+            echo "No simulator available; skipping tests"
+          fi
+
+      - name: Package unsigned IPA
+        working-directory: AuroraiOS
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Aurora.app Payload/
+          zip -qry Aurora-unsigned.ipa Payload
+          ls -la Aurora-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-unsigned-ipa
+          path: AuroraiOS/Aurora-unsigned.ipa
+          retention-days: 30
