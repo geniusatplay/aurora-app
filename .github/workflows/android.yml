@@ -1,0 +1,55 @@
+# Builds the Aurora Android app on GitHub's free Linux runners: unit tests + a debug APK
+# artifact you can install on any Android phone. The project is stored as AuroraApp.zip.
+name: Build Aurora Android
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack project
+        run: |
+          rm -rf AuroraApp
+          unzip -q AuroraApp.zip
+          rm -f AuroraApp/local.properties   # Windows sdk.dir; the runner provides ANDROID_HOME
+          chmod +x AuroraApp/gradlew
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        working-directory: AuroraApp
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Build debug APK
+        working-directory: AuroraApp
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Show compiler errors on failure
+        if: failure()
+        working-directory: AuroraApp
+        run: |
+          find . -path "*/build/reports/*" -name "*.html" | head -5 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aurora-debug-apk
+          path: AuroraApp/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-report
+          path: AuroraApp/app/build/reports/tests/
+          retention-days: 14
